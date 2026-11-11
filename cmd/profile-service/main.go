@@ -35,6 +35,8 @@ const (
 )
 
 func main() {
+	// JSON from the first line, even for config errors (LOG_LEVEL is not known yet).
+	slog.SetDefault(telemetry.NewLogger(os.Stdout, slog.LevelInfo))
 	if err := run(); err != nil {
 		slog.Error("exit", "error", err)
 		os.Exit(1)
