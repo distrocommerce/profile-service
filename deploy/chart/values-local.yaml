@@ -1,0 +1,33 @@
+# Local kind cluster "distro". Release name: profile, namespace: apps.
+#
+# auth.audiences (the ZITADEL project ID) is not committed: it changes after
+# an infra reset. Pass it as a string at deploy time:
+#   --set-string 'auth.audiences={<project id>}'
+image:
+  repository: profile-service
+
+service:
+  port: 8080
+
+probes:
+  liveness: /healthz
+  readiness: /readyz
+
+# DATABASE_URL, created in the infra repo by `make db-secrets`.
+envFromSecret: profile-db
+
+route:
+  enabled: true
+  host: api.localtest.me
+  pathPrefix: /v1/users
+
+auth:
+  issuer: http://auth.localtest.me:8080
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 64Mi
+  limits:
+    cpu: 500m
+    memory: 128Mi

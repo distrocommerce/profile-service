@@ -34,3 +34,7 @@ go.work.sum
 
 # Build output (make build)
 /bin/
+
+# Helm dependencies (helm dependency build)
+deploy/chart/charts/
+deploy/chart/Chart.lock

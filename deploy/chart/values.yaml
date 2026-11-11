@@ -1,0 +1,21 @@
+# Defaults for every environment. Environment files (values-local.yaml) set
+# the rest. Value keys are documented in the service-lib README.
+replicaCount: 1
+
+image:
+  repository: profile-service
+  tag: "" # set at deploy time: --set image.tag=<short git sha>
+  pullPolicy: IfNotPresent
+
+service:
+  port: 8080
+
+probes:
+  liveness: /healthz
+  readiness: /readyz
+
+env:
+  LOG_LEVEL: info
+
+route:
+  enabled: true

@@ -1,0 +1,10 @@
+apiVersion: v2
+name: profile
+description: DistroCommerce profile service (thin chart over service-lib)
+type: application
+version: 0.1.0
+dependencies:
+  - name: service-lib
+    version: 0.2.0
+    # Sibling checkout of distrocommerce-infra; later an OCI registry.
+    repository: file://../../../distrocommerce-infra/charts/service-lib
