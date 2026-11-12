@@ -21,8 +21,7 @@ production-shaped. Infrastructure (kind cluster, Envoy Gateway, ZITADEL, observa
 ## Layout
 - `cmd/profile-service/`: main (wiring, server, graceful shutdown only)
 - `internal/config`: environment configuration, fail-fast validation
-- `internal/httpapi`: routes, handlers, middleware; error codes are constants in `api.go`
-- `internal/problem`: the shared RFC 9457 helper (`problem.Write`)
+- `internal/httpapi`: routes, handlers, middleware; `errors.go` holds the error codes and `writeError`
 - `internal/store`: pgx store; migrations in `internal/store/migrations/NNNN_name.sql`
 - `internal/telemetry`: OTel providers, slog logger with `trace_id`
 - `deploy/chart/`: thin Helm chart over `service-lib`, plus `values-local.yaml`
@@ -44,4 +43,5 @@ production-shaped. Infrastructure (kind cluster, Envoy Gateway, ZITADEL, observa
   something this service needs, stop and describe the change for `../distrocommerce-infra`; do not work
   around it in `deploy/chart`, and do not edit the infra repo from here.
 - Never commit secrets. All code, comments, docs and commit messages are in English. No AI attribution in commits.
-- Commit in logical steps on `main`; push only when asked.
+- Never commit without the user's approval: propose the files and the message, then wait. One approval
+  covers one commit. Keep commits to logical steps on `main`; push only when asked.

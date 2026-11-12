@@ -18,19 +18,6 @@ import (
 // overwritten), so the service trusts it and does no JWT validation itself.
 const userIDHeader = "X-User-ID"
 
-// Stable error codes (the `code` member of problem responses).
-const (
-	codeUnauthenticated     = "unauthenticated"
-	codeProfileNotFound     = "profile_not_found"
-	codeNotFound            = "not_found"
-	codeMethodNotAllowed    = "method_not_allowed"
-	codeRequestTooLarge     = "request_too_large"
-	codeInvalidBody         = "invalid_body"
-	codeInternal            = "internal_error"
-	codeShuttingDown        = "shutting_down"
-	codeDatabaseUnavailable = "database_unavailable"
-)
-
 // Store is the persistence the handlers need.
 type Store interface {
 	Ping(ctx context.Context) error
@@ -64,7 +51,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /readyz", a.readyz)
 	mux.HandleFunc("GET /v1/users/me", a.getMe)
 
-	h := problemRouter(mux)
+	h := routeWithErrors(mux)
 	h = a.limitBody(h)
 	h = a.recoverPanics(h)
 	h = a.accessLog(h)

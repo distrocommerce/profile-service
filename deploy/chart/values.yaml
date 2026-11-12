@@ -3,7 +3,7 @@
 replicaCount: 1
 
 image:
-  repository: profile-service
+  repository: profile
   tag: "" # set at deploy time: --set image.tag=<short git sha>
   pullPolicy: IfNotPresent
 

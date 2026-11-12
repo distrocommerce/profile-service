@@ -1,6 +1,6 @@
 SHELL := /bin/bash
 
-IMAGE        ?= profile-service
+IMAGE        ?= profile
 TAG          ?= $(shell git rev-parse --short HEAD)
 RELEASE      ?= profile
 NAMESPACE    ?= apps

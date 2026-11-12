@@ -17,7 +17,6 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 
-	"github.com/distrocommerce/profile-service/internal/problem"
 	"github.com/distrocommerce/profile-service/internal/store"
 	"github.com/distrocommerce/profile-service/internal/telemetry"
 )
@@ -56,21 +55,21 @@ func serve(h http.Handler, r *http.Request) *httptest.ResponseRecorder {
 	return w
 }
 
-// assertProblem checks an RFC 9457 response and returns it.
-func assertProblem(t *testing.T, w *httptest.ResponseRecorder, status int, code string) problem.Details {
+// assertError checks an RFC 9457 response and returns it.
+func assertError(t *testing.T, w *httptest.ResponseRecorder, status int, code string) errorResponse {
 	t.Helper()
 	if w.Code != status {
 		t.Fatalf("status = %d, want %d (body %q)", w.Code, status, w.Body.String())
 	}
-	if ct := w.Header().Get("Content-Type"); ct != problem.ContentType {
-		t.Fatalf("Content-Type = %q, want %q", ct, problem.ContentType)
+	if ct := w.Header().Get("Content-Type"); ct != errorContentType {
+		t.Fatalf("Content-Type = %q, want %q", ct, errorContentType)
 	}
-	var p problem.Details
+	var p errorResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil {
 		t.Fatalf("body is not JSON: %v (%q)", err, w.Body.String())
 	}
 	if p.Status != status || p.Code != code || p.Type != "about:blank" || p.Title != http.StatusText(status) {
-		t.Fatalf("problem = %+v, want status %d code %q", p, status, code)
+		t.Fatalf("error response = %+v, want status %d code %q", p, status, code)
 	}
 	return p
 }
@@ -94,7 +93,7 @@ func TestReadyz(t *testing.T) {
 	t.Run("database down", func(t *testing.T) {
 		w := serve(newTestAPI(&fakeStore{pingErr: errors.New("connection refused")}, nil).Handler(),
 			httptest.NewRequest(http.MethodGet, "/readyz", nil))
-		p := assertProblem(t, w, http.StatusServiceUnavailable, codeDatabaseUnavailable)
+		p := assertError(t, w, http.StatusServiceUnavailable, codeDatabaseUnavailable)
 		if strings.Contains(p.Detail, "refused") {
 			t.Errorf("detail leaks the internal error: %q", p.Detail)
 		}
@@ -103,7 +102,7 @@ func TestReadyz(t *testing.T) {
 		api := newTestAPI(&fakeStore{}, nil)
 		api.StartDraining()
 		w := serve(api.Handler(), httptest.NewRequest(http.MethodGet, "/readyz", nil))
-		assertProblem(t, w, http.StatusServiceUnavailable, codeShuttingDown)
+		assertError(t, w, http.StatusServiceUnavailable, codeShuttingDown)
 	})
 }
 
@@ -139,7 +138,7 @@ func TestGetMe(t *testing.T) {
 	t.Run("no profile row", func(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/v1/users/me", nil)
 		r.Header.Set("X-User-ID", "999")
-		p := assertProblem(t, serve(newTestAPI(st, nil).Handler(), r), http.StatusNotFound, codeProfileNotFound)
+		p := assertError(t, serve(newTestAPI(st, nil).Handler(), r), http.StatusNotFound, codeProfileNotFound)
 		if p.Instance != "/v1/users/me" {
 			t.Errorf("instance = %q", p.Instance)
 		}
@@ -152,7 +151,7 @@ func TestGetMe(t *testing.T) {
 				r.Header.Set("X-User-ID", header)
 			}
 			w := serve(newTestAPI(st, nil).Handler(), r)
-			assertProblem(t, w, http.StatusUnauthorized, codeUnauthenticated)
+			assertError(t, w, http.StatusUnauthorized, codeUnauthenticated)
 			if w.Header().Get("WWW-Authenticate") != "Bearer" {
 				t.Errorf("WWW-Authenticate = %q", w.Header().Get("WWW-Authenticate"))
 			}
@@ -164,7 +163,7 @@ func TestGetMe(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/v1/users/me", nil)
 		r.Header.Set("X-User-ID", "1")
 		w := serve(newTestAPI(&fakeStore{getErr: errors.New("pq: secret detail")}, &logs).Handler(), r)
-		p := assertProblem(t, w, http.StatusInternalServerError, codeInternal)
+		p := assertError(t, w, http.StatusInternalServerError, codeInternal)
 		if strings.Contains(p.Detail, "secret") {
 			t.Errorf("detail leaks the internal error: %q", p.Detail)
 		}
@@ -178,11 +177,11 @@ func TestRouterErrors(t *testing.T) {
 	h := newTestAPI(&fakeStore{}, nil).Handler()
 
 	t.Run("unknown path", func(t *testing.T) {
-		assertProblem(t, serve(h, httptest.NewRequest(http.MethodGet, "/nope", nil)), http.StatusNotFound, codeNotFound)
+		assertError(t, serve(h, httptest.NewRequest(http.MethodGet, "/nope", nil)), http.StatusNotFound, codeNotFound)
 	})
 	t.Run("wrong method", func(t *testing.T) {
 		w := serve(h, httptest.NewRequest(http.MethodPost, "/v1/users/me", nil))
-		assertProblem(t, w, http.StatusMethodNotAllowed, codeMethodNotAllowed)
+		assertError(t, w, http.StatusMethodNotAllowed, codeMethodNotAllowed)
 		if allow := w.Header().Get("Allow"); allow != "GET, HEAD" {
 			t.Errorf("Allow = %q, want %q", allow, "GET, HEAD")
 		}
@@ -195,7 +194,7 @@ func TestBodyLimit(t *testing.T) {
 	t.Run("declared length over the limit", func(t *testing.T) {
 		r := httptest.NewRequest(http.MethodGet, "/v1/users/me", strings.NewReader(strings.Repeat("x", testMaxBody+1)))
 		r.Header.Set("X-User-ID", "1")
-		assertProblem(t, serve(api.Handler(), r), http.StatusRequestEntityTooLarge, codeRequestTooLarge)
+		assertError(t, serve(api.Handler(), r), http.StatusRequestEntityTooLarge, codeRequestTooLarge)
 	})
 
 	// A body without Content-Length (chunked) is cut by http.MaxBytesReader
@@ -214,7 +213,7 @@ func TestBodyLimit(t *testing.T) {
 
 	t.Run("streamed body over the limit", func(t *testing.T) {
 		body := `{"a":"` + strings.Repeat("x", testMaxBody) + `"}`
-		assertProblem(t, serve(decode, newReq(body)), http.StatusRequestEntityTooLarge, codeRequestTooLarge)
+		assertError(t, serve(decode, newReq(body)), http.StatusRequestEntityTooLarge, codeRequestTooLarge)
 	})
 	t.Run("body within the limit", func(t *testing.T) {
 		if w := serve(decode, newReq(`{"a":"b"}`)); w.Code != http.StatusNoContent {
@@ -222,7 +221,7 @@ func TestBodyLimit(t *testing.T) {
 		}
 	})
 	t.Run("invalid JSON", func(t *testing.T) {
-		assertProblem(t, serve(decode, newReq(`{`)), http.StatusBadRequest, codeInvalidBody)
+		assertError(t, serve(decode, newReq(`{`)), http.StatusBadRequest, codeInvalidBody)
 	})
 }
 
@@ -234,7 +233,7 @@ func TestPanicRecovery(t *testing.T) {
 		h := api.accessLog(api.recoverPanics(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
 			panic("boom")
 		})))
-		assertProblem(t, serve(h, httptest.NewRequest(http.MethodGet, "/x", nil)), http.StatusInternalServerError, codeInternal)
+		assertError(t, serve(h, httptest.NewRequest(http.MethodGet, "/x", nil)), http.StatusInternalServerError, codeInternal)
 		if !strings.Contains(logs.String(), `"panic":"boom"`) || !strings.Contains(logs.String(), `"status":500`) {
 			t.Errorf("panic or status not logged: %s", logs.String())
 		}

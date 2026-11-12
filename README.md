@@ -69,8 +69,7 @@ turns telemetry off. The Helm chart sets the service name (`profile`) and the co
 ```
 cmd/profile-service   main: wiring, server, graceful shutdown
 internal/config       environment configuration
-internal/httpapi      routes, handlers, middleware
-internal/problem      RFC 9457 error responses
+internal/httpapi      routes, handlers, middleware, error responses
 internal/store        PostgreSQL (pgx) and migrations
 internal/telemetry    OpenTelemetry providers, slog logger
 deploy/chart          Helm chart (depends on service-lib)
@@ -103,7 +102,7 @@ The `profile-db` secret (`DATABASE_URL`) comes from `make db-secrets` in the inf
 image tag is the short git SHA of `HEAD`, so commit first.
 
 ```sh
-make image                              # profile-service:<sha>, host platform (arm64)
+make image                              # profile:<sha>, host platform (arm64)
 make kind-load                          # into the kind cluster "distro"
 make deploy PROJECT_ID=<zitadel project id>
 kubectl get pods,httproute,securitypolicy -n apps

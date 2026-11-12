@@ -21,7 +21,7 @@ import (
 )
 
 // DefaultServiceName is used when OTEL_SERVICE_NAME is not set.
-const DefaultServiceName = "profile-service"
+const DefaultServiceName = "profile"
 
 // Setup installs global tracer and meter providers that export over OTLP/gRPC,
 // and the W3C trace-context and baggage propagators. Exporters, sampler and

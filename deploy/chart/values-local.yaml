@@ -4,7 +4,7 @@
 # an infra reset. Pass it as a string at deploy time:
 #   --set-string 'auth.audiences={<project id>}'
 image:
-  repository: profile-service
+  repository: profile
 
 service:
   port: 8080

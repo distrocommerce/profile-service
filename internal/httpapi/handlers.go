@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/distrocommerce/profile-service/internal/problem"
 	"github.com/distrocommerce/profile-service/internal/store"
 )
 
@@ -19,14 +18,14 @@ func (a *API) healthz(w http.ResponseWriter, _ *http.Request) {
 
 func (a *API) readyz(w http.ResponseWriter, r *http.Request) {
 	if a.draining.Load() {
-		problem.Write(w, r, http.StatusServiceUnavailable, codeShuttingDown, "the server is shutting down")
+		writeError(w, r, http.StatusServiceUnavailable, codeShuttingDown, "the server is shutting down")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), readinessPingTimeout)
 	defer cancel()
 	if err := a.store.Ping(ctx); err != nil {
 		a.log.WarnContext(r.Context(), "readiness check failed", "error", err)
-		problem.Write(w, r, http.StatusServiceUnavailable, codeDatabaseUnavailable, "the database does not answer")
+		writeError(w, r, http.StatusServiceUnavailable, codeDatabaseUnavailable, "the database does not answer")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
@@ -36,12 +35,12 @@ func (a *API) getMe(w http.ResponseWriter, r *http.Request) {
 	id := userID(r)
 	if id == "" {
 		w.Header().Set("WWW-Authenticate", "Bearer")
-		problem.Write(w, r, http.StatusUnauthorized, codeUnauthenticated, "missing "+userIDHeader+" header")
+		writeError(w, r, http.StatusUnauthorized, codeUnauthenticated, "missing "+userIDHeader+" header")
 		return
 	}
 	p, err := a.store.GetProfile(r.Context(), id)
 	if errors.Is(err, store.ErrNotFound) {
-		problem.Write(w, r, http.StatusNotFound, codeProfileNotFound, "no profile exists for this user")
+		writeError(w, r, http.StatusNotFound, codeProfileNotFound, "no profile exists for this user")
 		return
 	}
 	if err != nil {
@@ -53,7 +52,7 @@ func (a *API) getMe(w http.ResponseWriter, r *http.Request) {
 
 func (a *API) internalError(w http.ResponseWriter, r *http.Request, err error) {
 	a.log.ErrorContext(r.Context(), "request failed", "error", err)
-	problem.Write(w, r, http.StatusInternalServerError, codeInternal, "")
+	writeError(w, r, http.StatusInternalServerError, codeInternal, "")
 }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
@@ -77,6 +76,6 @@ func (a *API) decodeJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 		writeTooLarge(w, r, tooLarge.Limit)
 		return false
 	}
-	problem.Write(w, r, http.StatusBadRequest, codeInvalidBody, "the request body is not valid JSON for this endpoint")
+	writeError(w, r, http.StatusBadRequest, codeInvalidBody, "the request body is not valid JSON for this endpoint")
 	return false
 }

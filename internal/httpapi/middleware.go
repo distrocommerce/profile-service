@@ -6,14 +6,12 @@ import (
 	"net/http"
 	"runtime/debug"
 	"time"
-
-	"github.com/distrocommerce/profile-service/internal/problem"
 )
 
-// problemRouter serves mux, but answers unknown paths (404) and wrong methods
-// (405, keeping the mux's Allow header) in the problem format instead of the
+// routeWithErrors serves mux, but answers unknown paths (404) and wrong methods
+// (405, keeping the mux's Allow header) in the error format instead of the
 // mux's plain text.
-func problemRouter(mux *http.ServeMux) http.Handler {
+func routeWithErrors(mux *http.ServeMux) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h, pattern := mux.Handler(r)
 		if pattern != "" {
@@ -25,11 +23,11 @@ func problemRouter(mux *http.ServeMux) http.Handler {
 		h.ServeHTTP(probe, r)
 		if probe.status == http.StatusMethodNotAllowed {
 			w.Header().Set("Allow", probe.header.Get("Allow"))
-			problem.Write(w, r, http.StatusMethodNotAllowed, codeMethodNotAllowed,
+			writeError(w, r, http.StatusMethodNotAllowed, codeMethodNotAllowed,
 				fmt.Sprintf("method %s is not allowed for this path", r.Method))
 			return
 		}
-		problem.Write(w, r, http.StatusNotFound, codeNotFound, "no such endpoint")
+		writeError(w, r, http.StatusNotFound, codeNotFound, "no such endpoint")
 	})
 }
 
@@ -59,11 +57,11 @@ func (a *API) limitBody(next http.Handler) http.Handler {
 }
 
 func writeTooLarge(w http.ResponseWriter, r *http.Request, limit int64) {
-	problem.Write(w, r, http.StatusRequestEntityTooLarge, codeRequestTooLarge,
+	writeError(w, r, http.StatusRequestEntityTooLarge, codeRequestTooLarge,
 		fmt.Sprintf("the request body exceeds %d bytes", limit))
 }
 
-// recoverPanics turns a panic into a logged error and a 500 problem response
+// recoverPanics turns a panic into a logged error and a 500 error response
 // (if nothing was written yet). http.ErrAbortHandler is re-raised, as net/http
 // expects.
 func (a *API) recoverPanics(next http.Handler) http.Handler {
@@ -79,7 +77,7 @@ func (a *API) recoverPanics(next http.Handler) http.Handler {
 			}
 			a.log.ErrorContext(r.Context(), "panic", "panic", fmt.Sprint(v), "stack", string(debug.Stack()))
 			if !rw.wroteHeader {
-				problem.Write(rw, r, http.StatusInternalServerError, codeInternal, "")
+				writeError(rw, r, http.StatusInternalServerError, codeInternal, "")
 			}
 		}()
 		next.ServeHTTP(rw, r)

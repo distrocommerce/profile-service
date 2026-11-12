@@ -32,6 +32,9 @@ go.work.sum
 .idea/
 .vscode/
 
+# macOS
+.DS_Store
+
 # Build output (make build)
 /bin/
 
