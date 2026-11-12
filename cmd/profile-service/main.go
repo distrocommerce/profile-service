@@ -29,8 +29,11 @@ const (
 	writeTimeout      = 15 * time.Second
 	idleTimeout       = 60 * time.Second
 
-	// drainDelay is how long /readyz fails before the server stops accepting
-	// connections, so endpoints and Envoy stop routing to this pod first.
+	// drainDelay is how long the server keeps serving after SIGTERM. A
+	// terminating pod is removed from the EndpointSlice right away, but Envoy
+	// learns that through xDS a moment later and may still send requests here
+	// meanwhile. /readyz fails during this time as a second signal (the
+	// readiness probe runs only every 10 s, so it is not what removes the pod).
 	drainDelay = 5 * time.Second
 )
 

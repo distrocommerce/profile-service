@@ -1,7 +1,15 @@
 SHELL := /bin/bash
 
 IMAGE        ?= profile
-TAG          ?= $(shell git rev-parse --short HEAD)
+
+# Image tag: the short commit SHA; with uncommitted changes (tracked or untracked), plus a hash
+# of those changes. A rebuild from a changed tree gets a new tag, so `helm upgrade` rolls it out
+# (with the same tag it would be a no-op and the pod would keep the old image); the same tree
+# always gets the same tag, so separate `make image` and `make deploy` runs agree.
+GIT_SHA     := $(shell git rev-parse --short HEAD)
+GIT_CHANGES := $(shell git status --porcelain)
+GIT_DIFF_ID := $(shell { git diff HEAD; git ls-files --others --exclude-standard -z | xargs -0 git hash-object 2>/dev/null; } | git hash-object --stdin | cut -c1-7)
+TAG          ?= $(GIT_SHA)$(if $(GIT_CHANGES),-dirty-$(GIT_DIFF_ID))
 RELEASE      ?= profile
 NAMESPACE    ?= apps
 KIND_CLUSTER ?= distro

@@ -57,7 +57,8 @@ turns telemetry off. The Helm chart sets the service name (`profile`) and the co
   at startup in name order, each in a transaction, recorded in `schema_migrations`. A PostgreSQL
   advisory lock serializes replicas that start together.
 - **Shutdown** on SIGTERM/SIGINT: `/readyz` starts failing, the server keeps serving for 5 s
-  (so Envoy and the endpoints stop routing here), then drains in-flight requests within
+  (Kubernetes removes a terminating pod from the endpoints at once, but Envoy picks that up a
+  moment later and may still route here), then drains in-flight requests within
   `SHUTDOWN_TIMEOUT`, then flushes telemetry. A second signal kills the process at once.
 - **Logging**: JSON on stdout (`log/slog`). One line per request with `method`, `path`, `route`,
   `status`, `duration_ms` and `trace_id`; probe requests are logged at debug level.
@@ -99,10 +100,11 @@ PROFILE_TEST_DATABASE_URL='postgres://profile:profile_dev@localhost:5432/profile
 ## Deploy to the local cluster
 
 The `profile-db` secret (`DATABASE_URL`) comes from `make db-secrets` in the infra repository. The
-image tag is the short git SHA of `HEAD`, so commit first.
+image tag is the short git SHA of `HEAD`; with uncommitted changes it gets a `-dirty-<hash>` suffix
+derived from those changes, so every changed tree deploys as a new tag and rolls out.
 
 ```sh
-make image                              # profile:<sha>, host platform (arm64)
+make image                              # profile:<sha>[-dirty-<hash>], host platform (arm64)
 make kind-load                          # into the kind cluster "distro"
 make deploy PROJECT_ID=<zitadel project id>
 kubectl get pods,httproute,securitypolicy -n apps

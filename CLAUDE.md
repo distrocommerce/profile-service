@@ -35,10 +35,19 @@ production-shaped. Infrastructure (kind cluster, Envoy Gateway, ZITADEL, observa
 - Middleware between `otelhttp` and the mux must pass the same `*http.Request` on (no `r.WithContext`).
   The mux sets `r.Pattern` on it, and the span name, `http.route` and the access log read it afterwards.
 - Migrations are append-only: add a new numbered file, never edit an applied one.
+- `make test` skips the store test. After changing SQL or migrations, also run it against the compose
+  PostgreSQL with `PROFILE_TEST_DATABASE_URL` (see the README); it works in a throwaway schema.
+- `/readyz` must answer within the kubelet probe timeout (1 s; `service-lib` sets none): every dependency
+  check gets a timeout below that (the DB ping uses 800 ms).
+- Chart values: shared defaults in `deploy/chart/values.yaml`, only environment-specific settings in
+  `values-local.yaml` (and later one file per environment).
 - Check APIs and versions (`go doc`, module docs, `helm template`) instead of guessing; say when something is unverified.
 - Deploy loop: `make image kind-load deploy PROJECT_ID=<zitadel project id>`. Do not reset or recreate the kind
   cluster or the compose stores from this repo. The project ID changes after an infra reset, so it is never
   committed. `make run` listens on 8081 because kind holds 8080.
+- The image tag is the short SHA, plus `-dirty-<hash of the changes>` for an uncommitted tree: a changed tree
+  must get a new tag or `helm upgrade` is a no-op and the old pod keeps running. Keep that suffix; do not
+  commit just to deploy.
 - Never copy library templates; propose changes to the infra repo instead. If `service-lib` cannot express
   something this service needs, stop and describe the change for `../distrocommerce-infra`; do not work
   around it in `deploy/chart`, and do not edit the infra repo from here.

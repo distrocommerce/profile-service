@@ -10,7 +10,9 @@ import (
 	"github.com/distrocommerce/profile-service/internal/store"
 )
 
-const readinessPingTimeout = 2 * time.Second
+// readinessPingTimeout stays below the kubelet probe timeout (1 s by default, and service-lib
+// sets none), so a slow database gives a 503 from here instead of a probe timeout.
+const readinessPingTimeout = 800 * time.Millisecond
 
 func (a *API) healthz(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
