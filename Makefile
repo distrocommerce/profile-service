@@ -49,7 +49,7 @@ kind-load:
 
 deploy: ## needs PROJECT_ID (the ZITADEL project ID): make deploy PROJECT_ID=...
 	@test -n "$(PROJECT_ID)" || { echo "PROJECT_ID is required (the ZITADEL project ID)"; exit 1; }
-	helm dependency build $(CHART)
+	helm dependency update $(CHART)
 	helm upgrade --install $(RELEASE) $(CHART) -n $(NAMESPACE) \
 	  -f $(CHART)/values-local.yaml \
 	  --set image.tag=$(TAG) \
