@@ -64,6 +64,9 @@ turns telemetry off. The Helm chart sets the service name (`profile`) and the co
   `status`, `duration_ms` and `trace_id`; probe requests are logged at debug level.
 - **Tracing**: server spans named after the route (`GET /v1/users/me`), continuing the trace
   started at Envoy; one span per SQL query; `/healthz` and `/readyz` are not traced.
+- **Metrics** (OTLP, every 15 s): HTTP server duration and body sizes per route and status, pgx
+  operation durations and pool statistics, Go runtime (memory, goroutines, GC goal, GOMAXPROCS,
+  scheduling latency). Grafana dashboard: **Service overview**, service `profile`.
 
 ## Layout
 

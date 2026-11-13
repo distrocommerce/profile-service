@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/contrib/instrumentation/runtime"
 	"go.opentelemetry.io/otel"
 	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc"
 	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc"
@@ -29,6 +30,9 @@ const DefaultServiceName = "profile"
 // OTEL_EXPORTER_OTLP_ENDPOINT, OTEL_TRACES_SAMPLER, OTEL_RESOURCE_ATTRIBUTES,
 // ...); an http:// endpoint means a plaintext connection.
 // OTEL_SDK_DISABLED=true leaves the no-op providers in place.
+//
+// Go runtime metrics (memory, goroutines, GC goal, GOMAXPROCS, goroutine
+// scheduling latency) are exported with the application metrics.
 //
 // The returned function flushes and stops the providers.
 func Setup(ctx context.Context, version string) (shutdown func(context.Context) error, err error) {
@@ -64,9 +68,16 @@ func Setup(ctx context.Context, version string) (shutdown func(context.Context) 
 		sdktrace.WithResource(res),
 	)
 	mp := sdkmetric.NewMeterProvider(
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp, sdkmetric.WithInterval(15*time.Second))),
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExp,
+			sdkmetric.WithInterval(15*time.Second),
+			sdkmetric.WithProducer(runtime.NewProducer()), // go.schedule.duration
+		)),
 		sdkmetric.WithResource(res),
 	)
+	if err := runtime.Start(runtime.WithMeterProvider(mp)); err != nil {
+		return nil, errors.Join(fmt.Errorf("start runtime metrics: %w", err),
+			tp.Shutdown(ctx), mp.Shutdown(ctx))
+	}
 	otel.SetTracerProvider(tp)
 	otel.SetMeterProvider(mp)
 
