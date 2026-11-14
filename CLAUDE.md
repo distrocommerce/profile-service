@@ -39,6 +39,9 @@ production-shaped. Infrastructure (kind cluster, Envoy Gateway, ZITADEL, observa
   PostgreSQL with `PROFILE_TEST_DATABASE_URL` (see the README); it works in a throwaway schema.
 - `/readyz` must answer within the kubelet probe timeout (1 s; `service-lib` sets none): every dependency
   check gets a timeout below that (the DB ping uses 800 ms).
+- The pod runs with the `service-lib` security defaults: non-root, read-only root filesystem, no capabilities.
+  Never write files at runtime (no temp files, no local caches); if that becomes necessary, propose a writable
+  volume in `service-lib` instead of turning the defaults off here.
 - Chart values: shared defaults in `deploy/chart/values.yaml`, only environment-specific settings in
   `values-local.yaml` (and later one file per environment).
 - Check APIs and versions (`go doc`, module docs, `helm template`) instead of guessing; say when something is unverified.

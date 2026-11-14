@@ -114,6 +114,9 @@ kubectl get pods,httproute,securitypolicy -n apps
 make undeploy
 ```
 
+The pod runs with the library chart's security defaults (non-root UID 65532, read-only root filesystem,
+no capabilities, RuntimeDefault seccomp), so the service writes no files.
+
 The ZITADEL project ID is the token audience. It changes after an infra reset, so it is passed at
 deploy time (`--set-string`, because the library chart rejects unquoted numbers) instead of being
 committed.
