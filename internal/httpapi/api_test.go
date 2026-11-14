@@ -22,9 +22,12 @@ import (
 )
 
 type fakeStore struct {
-	pingErr  error
-	profiles map[string]store.Profile
-	getErr   error
+	pingErr     error
+	profiles    map[string]store.Profile
+	getErr      error
+	upsertErr   error
+	upsertCalls int
+	clock       time.Time // advanced one second per upsert
 }
 
 func (f *fakeStore) Ping(context.Context) error { return f.pingErr }
@@ -38,6 +41,33 @@ func (f *fakeStore) GetProfile(_ context.Context, id string) (store.Profile, err
 		return store.Profile{}, store.ErrNotFound
 	}
 	return p, nil
+}
+
+// UpsertProfile mimics the SQL statement: create, replace, or leave the row
+// (and updated_at) alone when nothing changes.
+func (f *fakeStore) UpsertProfile(_ context.Context, id, name string) (store.Profile, bool, error) {
+	f.upsertCalls++
+	if f.upsertErr != nil {
+		return store.Profile{}, false, f.upsertErr
+	}
+	if f.clock.IsZero() {
+		f.clock = time.Date(2026, 11, 1, 12, 0, 0, 0, time.UTC)
+	}
+	f.clock = f.clock.Add(time.Second)
+	if f.profiles == nil {
+		f.profiles = map[string]store.Profile{}
+	}
+	p, ok := f.profiles[id]
+	if !ok {
+		p = store.Profile{UserID: id, DisplayName: name, CreatedAt: f.clock, UpdatedAt: f.clock}
+		f.profiles[id] = p
+		return p, true, nil
+	}
+	if p.DisplayName != name {
+		p.DisplayName, p.UpdatedAt = name, f.clock
+		f.profiles[id] = p
+	}
+	return p, false, nil
 }
 
 const testMaxBody = 64
@@ -182,8 +212,8 @@ func TestRouterErrors(t *testing.T) {
 	t.Run("wrong method", func(t *testing.T) {
 		w := serve(h, httptest.NewRequest(http.MethodPost, "/v1/users/me", nil))
 		assertError(t, w, http.StatusMethodNotAllowed, codeMethodNotAllowed)
-		if allow := w.Header().Get("Allow"); allow != "GET, HEAD" {
-			t.Errorf("Allow = %q, want %q", allow, "GET, HEAD")
+		if allow := w.Header().Get("Allow"); allow != "GET, HEAD, PUT" {
+			t.Errorf("Allow = %q, want %q", allow, "GET, HEAD, PUT")
 		}
 	})
 }
@@ -222,6 +252,25 @@ func TestBodyLimit(t *testing.T) {
 	})
 	t.Run("invalid JSON", func(t *testing.T) {
 		assertError(t, serve(decode, newReq(`{`)), http.StatusBadRequest, codeInvalidBody)
+	})
+	for name, body := range map[string]string{
+		"trailing garbage": `{"a":"b"} garbage`,
+		"second value":     `{"a":"b"}{"c":"d"}`,
+		"stray brace":      `{"a":"b"}}`,
+		"trailing number":  `{"a":"b"} 1`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			assertError(t, serve(decode, newReq(body)), http.StatusBadRequest, codeInvalidBody)
+		})
+	}
+	t.Run("trailing whitespace", func(t *testing.T) {
+		if w := serve(decode, newReq("{\"a\":\"b\"} \r\n\t \n")); w.Code != http.StatusNoContent {
+			t.Fatalf("status = %d (body %q)", w.Code, w.Body.String())
+		}
+	})
+	t.Run("trailing whitespace over the limit", func(t *testing.T) {
+		body := `{"a":"b"}` + strings.Repeat(" ", testMaxBody)
+		assertError(t, serve(decode, newReq(body)), http.StatusRequestEntityTooLarge, codeRequestTooLarge)
 	})
 }
 
@@ -293,4 +342,237 @@ func TestTracingAndAccessLog(t *testing.T) {
 		line["trace_id"] != traceID || line["duration_ms"] == nil {
 		t.Errorf("access log line = %v (trace %s)", line, traceID)
 	}
+}
+
+func newPutMe(userID, body string) *http.Request {
+	r := httptest.NewRequest(http.MethodPut, "/v1/users/me", strings.NewReader(body))
+	if userID != "" {
+		r.Header.Set("X-User-ID", userID)
+	}
+	return r
+}
+
+// decodeProfile checks a profile response and returns it.
+func decodeProfile(t *testing.T, w *httptest.ResponseRecorder, status int) store.Profile {
+	t.Helper()
+	if w.Code != status || w.Header().Get("Content-Type") != "application/json" {
+		t.Fatalf("got %d %q (body %q), want %d application/json", w.Code, w.Header().Get("Content-Type"), w.Body.String(), status)
+	}
+	var p store.Profile
+	if err := json.Unmarshal(w.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestPutMe(t *testing.T) {
+	const user = "312345678901234567"
+	// A limit large enough for the longest valid names; TestPutMeBodyLimit
+	// covers the limit itself.
+	newAPI := func(st *fakeStore, logOut io.Writer) http.Handler {
+		if logOut == nil {
+			logOut = io.Discard
+		}
+		return New(st, telemetry.NewLogger(logOut, slog.LevelDebug), 4096).Handler()
+	}
+
+	t.Run("create returns 201 in the shape of GET", func(t *testing.T) {
+		st := &fakeStore{}
+		h := newAPI(st, nil)
+		w := serve(h, newPutMe(user, `{"display_name":"Ada"}`))
+		var got map[string]any
+		_ = decodeProfile(t, w, http.StatusCreated)
+		if err := json.Unmarshal(w.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 5 || got["user_id"] != user || got["display_name"] != "Ada" || got["email"] != "" ||
+			got["created_at"] == nil || got["created_at"] != got["updated_at"] {
+			t.Errorf("body = %v", got)
+		}
+
+		r := httptest.NewRequest(http.MethodGet, "/v1/users/me", nil)
+		r.Header.Set("X-User-ID", user)
+		if g := serve(h, r); g.Code != http.StatusOK || g.Body.String() != w.Body.String() {
+			t.Errorf("GET after PUT = %d %q, want 200 %q", g.Code, g.Body.String(), w.Body.String())
+		}
+	})
+
+	t.Run("updates", func(t *testing.T) {
+		h := newAPI(&fakeStore{}, nil)
+		first := decodeProfile(t, serve(h, newPutMe(user, `{"display_name":"Ada"}`)), http.StatusCreated)
+
+		same := decodeProfile(t, serve(h, newPutMe(user, `{"display_name":"Ada"}`)), http.StatusOK)
+		if same != first {
+			t.Errorf("identical PUT = %+v, want unchanged %+v", same, first)
+		}
+		padded := decodeProfile(t, serve(h, newPutMe(user, `{"display_name":"  Ada "}`)), http.StatusOK)
+		if padded != first {
+			t.Errorf("PUT differing only in whitespace = %+v, want unchanged %+v", padded, first)
+		}
+
+		changed := decodeProfile(t, serve(h, newPutMe(user, `{"display_name":"Ada Lovelace"}`)), http.StatusOK)
+		if changed.DisplayName != "Ada Lovelace" || !changed.CreatedAt.Equal(first.CreatedAt) ||
+			!changed.UpdatedAt.After(first.UpdatedAt) {
+			t.Errorf("changed PUT = %+v, first %+v", changed, first)
+		}
+
+		cleared := decodeProfile(t, serve(h, newPutMe(user, `{"display_name":""}`)), http.StatusOK)
+		if cleared.DisplayName != "" || !cleared.UpdatedAt.After(changed.UpdatedAt) {
+			t.Errorf("clearing PUT = %+v, before %+v", cleared, changed)
+		}
+	})
+
+	existing := func() *fakeStore {
+		return &fakeStore{profiles: map[string]store.Profile{user: {UserID: user, DisplayName: "Ada"}}}
+	}
+	assertUnchanged := func(t *testing.T, st *fakeStore) {
+		t.Helper()
+		if st.upsertCalls != 0 || st.profiles[user].DisplayName != "Ada" {
+			t.Errorf("store touched: %d upserts, profile %+v", st.upsertCalls, st.profiles[user])
+		}
+	}
+
+	for name, body := range map[string]string{
+		"malformed JSON":        `{"display_name":`,
+		"empty body":            ``,
+		"wrong type":            `{"display_name":42}`,
+		"array body":            `["Ada"]`,
+		"null body":             `null`,
+		"unknown field":         `{"display_name":"Ada","nickname":"A"}`,
+		"email field":           `{"display_name":"Ada","email":"ada@example.com"}`,
+		"user_id field":         `{"display_name":"Ada","user_id":"other"}`,
+		"trailing data":         `{"display_name":"Ada"} garbage`,
+		"second value":          `{"display_name":"Ada"}{"email":"ada@example.com"}`,
+		"Email in another case": `{"display_name":"Ada","Email":"ada@example.com"}`,
+	} {
+		t.Run("invalid_body: "+name, func(t *testing.T) {
+			st := existing()
+			p := assertError(t, serve(newAPI(st, nil), newPutMe(user, body)), http.StatusBadRequest, codeInvalidBody)
+			if p.Errors != nil {
+				t.Errorf("errors = %+v, want none", p.Errors)
+			}
+			assertUnchanged(t, st)
+		})
+	}
+
+	for name, tc := range map[string]struct{ body, code string }{
+		"empty object":      {`{}`, fieldRequired},
+		"null display_name": {`{"display_name":null}`, fieldRequired},
+		"too long":          {`{"display_name":"` + strings.Repeat("é", 65) + `"}`, fieldTooLong},
+		"control character": {`{"display_name":"Ada\nLovelace"}`, fieldInvalidCharacter},
+		"NUL":               {`{"display_name":"Ada\u0000"}`, fieldInvalidCharacter},
+	} {
+		t.Run("validation_failed: "+name, func(t *testing.T) {
+			st := existing()
+			p := assertError(t, serve(newAPI(st, nil), newPutMe(user, tc.body)), http.StatusBadRequest, codeValidationFailed)
+			if len(p.Errors) != 1 || p.Errors[0].Field != "display_name" || p.Errors[0].Code != tc.code || p.Errors[0].Detail == "" {
+				t.Errorf("errors = %+v, want one display_name %s", p.Errors, tc.code)
+			}
+			if p.Instance != "/v1/users/me" {
+				t.Errorf("instance = %q", p.Instance)
+			}
+			assertUnchanged(t, st)
+		})
+	}
+
+	t.Run("header value is trimmed", func(t *testing.T) {
+		st := &fakeStore{}
+		p := decodeProfile(t, serve(newAPI(st, nil), newPutMe("  42  ", `{"display_name":"Ada"}`)), http.StatusCreated)
+		if _, ok := st.profiles["42"]; p.UserID != "42" || !ok || len(st.profiles) != 1 {
+			t.Errorf("user_id = %q, stored %v", p.UserID, st.profiles)
+		}
+	})
+
+	t.Run("user_id in the query is ignored", func(t *testing.T) {
+		st := &fakeStore{}
+		r := httptest.NewRequest(http.MethodPut, "/v1/users/me?user_id=other", strings.NewReader(`{"display_name":"Ada"}`))
+		r.Header.Set("X-User-ID", user)
+		p := decodeProfile(t, serve(newAPI(st, nil), r), http.StatusCreated)
+		if _, other := st.profiles["other"]; p.UserID != user || other || len(st.profiles) != 1 {
+			t.Errorf("user_id = %q, stored %v", p.UserID, st.profiles)
+		}
+	})
+
+	// Accepted encoding/json v1 behavior (see design.md); these fail once
+	// decodeJSON matches member names exactly.
+	t.Run("member names match case-insensitively", func(t *testing.T) {
+		p := decodeProfile(t, serve(newAPI(&fakeStore{}, nil), newPutMe(user, `{"DISPLAY_NAME":"Ada"}`)), http.StatusCreated)
+		if p.DisplayName != "Ada" {
+			t.Errorf("display_name = %q, want Ada", p.DisplayName)
+		}
+	})
+	t.Run("last repeated member wins", func(t *testing.T) {
+		p := decodeProfile(t, serve(newAPI(&fakeStore{}, nil), newPutMe(user, `{"display_name":"Ada","Display_Name":"Eve"}`)), http.StatusCreated)
+		if p.DisplayName != "Eve" {
+			t.Errorf("display_name = %q, want Eve", p.DisplayName)
+		}
+	})
+
+	t.Run("trailing whitespace", func(t *testing.T) {
+		decodeProfile(t, serve(newAPI(&fakeStore{}, nil), newPutMe(user, "{\"display_name\":\"Ada\"}  \n")), http.StatusCreated)
+	})
+
+	t.Run("longest name in a multi-byte script", func(t *testing.T) {
+		name := strings.Repeat("😀", 64)
+		p := decodeProfile(t, serve(newAPI(&fakeStore{}, nil), newPutMe(user, `{"display_name":"`+name+`"}`)), http.StatusCreated)
+		if p.DisplayName != name {
+			t.Errorf("display_name = %q", p.DisplayName)
+		}
+	})
+
+	for name, header := range map[string]string{"missing header": "", "blank header": "   "} {
+		t.Run("401: "+name, func(t *testing.T) {
+			st := &fakeStore{}
+			r := newPutMe("", `{"display_name":"Ada"}`)
+			if header != "" {
+				r.Header.Set("X-User-ID", header)
+			}
+			w := serve(newAPI(st, nil), r)
+			assertError(t, w, http.StatusUnauthorized, codeUnauthenticated)
+			if w.Header().Get("WWW-Authenticate") != "Bearer" {
+				t.Errorf("WWW-Authenticate = %q", w.Header().Get("WWW-Authenticate"))
+			}
+			if st.upsertCalls != 0 {
+				t.Errorf("store called %d times", st.upsertCalls)
+			}
+		})
+	}
+
+	t.Run("store error", func(t *testing.T) {
+		var logs bytes.Buffer
+		w := serve(newAPI(&fakeStore{upsertErr: errors.New("pq: secret detail")}, &logs), newPutMe(user, `{"display_name":"Ada"}`))
+		p := assertError(t, w, http.StatusInternalServerError, codeInternal)
+		if strings.Contains(p.Detail, "secret") {
+			t.Errorf("detail leaks the internal error: %q", p.Detail)
+		}
+		if !strings.Contains(logs.String(), "pq: secret detail") {
+			t.Errorf("error not logged: %s", logs.String())
+		}
+	})
+}
+
+func TestPutMeBodyLimit(t *testing.T) {
+	body := `{"display_name":"` + strings.Repeat("a", testMaxBody) + `"}`
+
+	t.Run("declared length over the limit", func(t *testing.T) {
+		st := &fakeStore{}
+		assertError(t, serve(newTestAPI(st, nil).Handler(), newPutMe("1", body)), http.StatusRequestEntityTooLarge, codeRequestTooLarge)
+		if st.upsertCalls != 0 {
+			t.Errorf("store called %d times", st.upsertCalls)
+		}
+	})
+	t.Run("declared length over the limit without the header", func(t *testing.T) {
+		// The body limit is checked before authentication.
+		w := serve(newTestAPI(&fakeStore{}, nil).Handler(), newPutMe("", body))
+		assertError(t, w, http.StatusRequestEntityTooLarge, codeRequestTooLarge)
+	})
+	t.Run("streamed body over the limit", func(t *testing.T) {
+		st := &fakeStore{}
+		r := newPutMe("1", body)
+		r.ContentLength = -1 // unknown length
+		assertError(t, serve(newTestAPI(st, nil).Handler(), r), http.StatusRequestEntityTooLarge, codeRequestTooLarge)
+		if st.upsertCalls != 0 {
+			t.Errorf("store called %d times", st.upsertCalls)
+		}
+	})
 }

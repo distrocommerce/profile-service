@@ -11,11 +11,31 @@ with the shared Helm library chart. It is the template for the other services.
 | `GET /healthz`      | Liveness. No dependencies; always 200 while the process serves.             |
 | `GET /readyz`       | Readiness. Pings PostgreSQL; 503 if it fails or the server is shutting down. |
 | `GET /v1/users/me`  | The caller's profile. 401 without `X-User-ID`, 404 if no profile row exists. |
+| `PUT /v1/users/me`  | Create (201) or replace (200) the caller's profile. 401 without `X-User-ID`. |
+
+Both return the profile:
 
 ```json
 {"user_id":"312345678901234567","display_name":"Ada","email":"ada@example.com",
  "created_at":"2026-11-01T12:00:00Z","updated_at":"2026-11-01T12:00:00Z"}
 ```
+
+**`PUT /v1/users/me`** replaces every client-writable field; the body is exactly
+`{"display_name": "<string>"}`.
+
+- `display_name` is required (missing or `null` → 400 `validation_failed`, code `required`), so a
+  repeated call can never erase a name by accident. Surrounding whitespace is trimmed; `""` means no
+  display name; at most 64 Unicode characters (code points, not bytes) after trimming
+  (`too_long`); no control characters such as newlines, tabs or NUL inside the name
+  (`invalid_character`). Any script and emoji are allowed, stored as sent.
+- Any other member, including `email` and `user_id`, is rejected with 400 `invalid_body`. The user
+  comes only from `X-User-ID`; `email` belongs to ZITADEL and is empty for profiles created here.
+- 201 when the profile was created, 200 when it existed (changed or not). A PUT that changes
+  nothing leaves `updated_at` as it was: `updated_at` is the time of the last real change.
+
+**Bootstrap after login.** Other services never assume a profile exists. A client calls
+`GET /v1/users/me` and, only on 404 `profile_not_found`, `PUT /v1/users/me` to create it; later
+edits are PUTs with the full set of fields.
 
 **Trust model.** Envoy validates the JWT and sets `X-User-ID` from `sub`, overwriting any client
 value. The service trusts the header and does no JWT validation, so it must only be reachable
@@ -31,8 +51,19 @@ including router 404/405, 413 and panics. `type` is `about:blank`, `title` the s
 ```
 
 Codes: `unauthenticated` (401), `profile_not_found` (404), `not_found` (404, unknown path),
-`method_not_allowed` (405), `invalid_body` (400), `request_too_large` (413), `internal_error`
-(500), `database_unavailable` / `shutting_down` (503, readiness).
+`method_not_allowed` (405), `invalid_body` (400, malformed JSON, wrong types or unknown members),
+`validation_failed` (400, well-formed body with invalid values), `request_too_large` (413),
+`internal_error` (500), `database_unavailable` / `shutting_down` (503, readiness).
+
+A `validation_failed` response also has an `errors` member: one entry per invalid field, with the
+JSON member name, a stable `code` (`required`, `too_long`, `invalid_character`) and a `detail`. No
+other error carries `errors`.
+
+```json
+{"type":"about:blank","title":"Bad Request","status":400,"detail":"the request has invalid fields",
+ "instance":"/v1/users/me","code":"validation_failed",
+ "errors":[{"field":"display_name","code":"too_long","detail":"must be at most 64 characters"}]}
+```
 
 ## Configuration
 
@@ -125,7 +156,9 @@ Check through Envoy (get `$TOKEN` as in step 5 of the runbook):
 
 ```sh
 curl -i http://api.localtest.me:8080/v1/users/me                                   # 401 from Envoy
-curl -i -H "Authorization: Bearer $TOKEN" http://api.localtest.me:8080/v1/users/me # 404 problem+json until a profile row exists
+curl -i -H "Authorization: Bearer $TOKEN" http://api.localtest.me:8080/v1/users/me # 404 problem+json until the profile exists
+curl -i -X PUT -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{"display_name":"Ada"}' http://api.localtest.me:8080/v1/users/me              # 201 first, 200 afterwards
 ```
 
 Traces: Grafana (http://grafana.localtest.me:8080) → Explore → Tempo, `service.name=profile`.

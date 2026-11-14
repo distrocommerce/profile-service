@@ -22,6 +22,7 @@ const userIDHeader = "X-User-ID"
 type Store interface {
 	Ping(ctx context.Context) error
 	GetProfile(ctx context.Context, userID string) (store.Profile, error)
+	UpsertProfile(ctx context.Context, userID, displayName string) (store.Profile, bool, error)
 }
 
 // API serves the HTTP endpoints.
@@ -50,6 +51,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /healthz", a.healthz)
 	mux.HandleFunc("GET /readyz", a.readyz)
 	mux.HandleFunc("GET /v1/users/me", a.getMe)
+	mux.HandleFunc("PUT /v1/users/me", a.putMe)
 
 	h := routeWithErrors(mux)
 	h = a.limitBody(h)
