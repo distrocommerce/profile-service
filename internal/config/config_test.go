@@ -20,6 +20,7 @@ func TestLoadDefaults(t *testing.T) {
 		Port:            8080,
 		DatabaseURL:     "postgres://u:p@localhost:5432/db",
 		LogLevel:        slog.LevelInfo,
+		LogExportLevel:  slog.LevelInfo,
 		ShutdownTimeout: 20 * time.Second,
 		MaxBodyBytes:    1 << 20,
 	}
@@ -57,6 +58,7 @@ func TestLoadInvalid(t *testing.T) {
 		{"port out of range", map[string]string{"DATABASE_URL": "x", "PORT": "70000"}, "PORT"},
 		{"port zero", map[string]string{"DATABASE_URL": "x", "PORT": "0"}, "PORT"},
 		{"log level", map[string]string{"DATABASE_URL": "x", "LOG_LEVEL": "verbose"}, "LOG_LEVEL"},
+		{"log export level", map[string]string{"DATABASE_URL": "x", "LOG_EXPORT_LEVEL": "verbose"}, "LOG_EXPORT_LEVEL"},
 		{"timeout no unit", map[string]string{"DATABASE_URL": "x", "SHUTDOWN_TIMEOUT": "20"}, "SHUTDOWN_TIMEOUT"},
 		{"timeout negative", map[string]string{"DATABASE_URL": "x", "SHUTDOWN_TIMEOUT": "-1s"}, "SHUTDOWN_TIMEOUT"},
 		{"body zero", map[string]string{"DATABASE_URL": "x", "MAX_BODY_BYTES": "0"}, "MAX_BODY_BYTES"},
@@ -73,13 +75,30 @@ func TestLoadInvalid(t *testing.T) {
 }
 
 func TestLoadReportsAllErrors(t *testing.T) {
-	_, err := Load(env(map[string]string{"PORT": "x", "LOG_LEVEL": "x"}))
+	_, err := Load(env(map[string]string{"PORT": "x", "LOG_LEVEL": "x", "LOG_EXPORT_LEVEL": "x"}))
 	if err == nil {
 		t.Fatal("expected an error")
 	}
-	for _, s := range []string{"PORT", "DATABASE_URL", "LOG_LEVEL"} {
+	for _, s := range []string{"PORT", "DATABASE_URL", "LOG_LEVEL", "LOG_EXPORT_LEVEL"} {
 		if !strings.Contains(err.Error(), s) {
 			t.Errorf("error %q does not mention %s", err, s)
 		}
+	}
+}
+
+func TestLoadLogExportLevel(t *testing.T) {
+	for v, want := range map[string]slog.Level{
+		"debug": slog.LevelDebug, "info": slog.LevelInfo, "warn": slog.LevelWarn, "error": slog.LevelError,
+		"DEBUG": slog.LevelDebug,
+	} {
+		t.Run(v, func(t *testing.T) {
+			cfg, err := Load(env(map[string]string{"DATABASE_URL": "x", "LOG_EXPORT_LEVEL": v}))
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.LogExportLevel != want || cfg.LogLevel != slog.LevelInfo {
+				t.Errorf("LogExportLevel = %v, LogLevel = %v; want %v and info", cfg.LogExportLevel, cfg.LogLevel, want)
+			}
+		})
 	}
 }

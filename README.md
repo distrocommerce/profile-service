@@ -69,18 +69,20 @@ other error carries `errors`.
 
 Environment variables only; invalid values stop the service at startup with all errors listed.
 
-| Variable           | Default  | Description                                       |
-|--------------------|----------|---------------------------------------------------|
-| `DATABASE_URL`     | required | PostgreSQL URL (pgx format)                       |
-| `PORT`             | `8080`   | HTTP port                                         |
-| `LOG_LEVEL`        | `info`   | `debug`, `info`, `warn`, `error`                  |
-| `SHUTDOWN_TIMEOUT` | `20s`    | Total time for graceful shutdown (Go duration)    |
-| `MAX_BODY_BYTES`   | `1048576`| Request body limit (413 above it)                 |
+| Variable           | Default   | Description                                                                |
+|--------------------|-----------|----------------------------------------------------------------------------|
+| `DATABASE_URL`     | required  | PostgreSQL URL (pgx format)                                                |
+| `PORT`             | `8080`    | HTTP port                                                                  |
+| `LOG_LEVEL`        | `info`    | Stdout log level: `debug`, `info`, `warn`, `error`                         |
+| `LOG_EXPORT_LEVEL` | `info`    | Minimum level exported over OTLP (same values), independent of `LOG_LEVEL` |
+| `SHUTDOWN_TIMEOUT` | `20s`     | Total time for graceful shutdown (Go duration)                             |
+| `MAX_BODY_BYTES`   | `1048576` | Request body limit (413 above it)                                          |
 
 OpenTelemetry uses the standard `OTEL_*` variables (`OTEL_SERVICE_NAME`,
-`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_TRACES_SAMPLER`, `OTEL_RESOURCE_ATTRIBUTES`, ...). Traces and
-metrics go over OTLP/gRPC; an `http://` endpoint means plaintext. `OTEL_SDK_DISABLED=true`
-turns telemetry off. The Helm chart sets the service name (`profile`) and the collector endpoint.
+`OTEL_EXPORTER_OTLP_ENDPOINT`, `OTEL_TRACES_SAMPLER`, `OTEL_RESOURCE_ATTRIBUTES`, `OTEL_BLRP_*`, ...).
+Traces, metrics and logs go over OTLP/gRPC; an `http://` endpoint means plaintext.
+`OTEL_SDK_DISABLED=true` turns telemetry off, including log export (stdout logging stays). The Helm
+chart sets the service name (`profile`) and the collector endpoint.
 
 ## Behavior
 
@@ -91,8 +93,20 @@ turns telemetry off. The Helm chart sets the service name (`profile`) and the co
   (Kubernetes removes a terminating pod from the endpoints at once, but Envoy picks that up a
   moment later and may still route here), then drains in-flight requests within
   `SHUTDOWN_TIMEOUT`, then flushes telemetry. A second signal kills the process at once.
-- **Logging**: JSON on stdout (`log/slog`). One line per request with `method`, `path`, `route`,
-  `status`, `duration_ms` and `trace_id`; probe requests are logged at debug level.
+- **Logging**: one `log/slog` logger with two outputs, each with its own level:
+  - JSON on stdout at `LOG_LEVEL`: one line per request with `method`, `path`, `route`, `status`,
+    `duration_ms`, `trace_id` and `span_id`; probe requests are logged at debug level.
+  - OTLP export to the collector (and from there to Loki) at `LOG_EXPORT_LEVEL`, default `info`, so
+    probe lines stay off OTLP. Records carry the trace and span ID as the OTLP trace context (not as
+    attributes), so Grafana can link a log line to its trace. In Loki, `service.name` is the label
+    `service_name`; `trace_id`, `span_id` and the record's fields are structured metadata, and an
+    `error` field becomes `exception_message` (with `exception_type`).
+  - The error that stops the process is logged as `exit` before the shutdown flush, so it is exported
+    too. Only errors before telemetry setup (configuration, exporter creation) are on stdout alone.
+    On shutdown, traces, metrics and logs are flushed in parallel within 5 s.
+  - Export failures do not affect requests or stdout. OpenTelemetry's own errors (such as a timed-out
+    export) are logged to stdout as WARN `opentelemetry error` lines whatever `LOG_LEVEL` is, and are
+    never exported, so a failing export cannot feed itself.
 - **Tracing**: server spans named after the route (`GET /v1/users/me`), continuing the trace
   started at Envoy; one span per SQL query; `/healthz` and `/readyz` are not traced.
 - **Metrics** (OTLP, every 15 s): HTTP server duration and body sizes per route and status, pgx

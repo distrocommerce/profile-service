@@ -15,6 +15,7 @@ type Config struct {
 	Port            int
 	DatabaseURL     string
 	LogLevel        slog.Level
+	LogExportLevel  slog.Level // minimum level exported over OTLP; LogLevel applies to stdout
 	ShutdownTimeout time.Duration
 	MaxBodyBytes    int64
 }
@@ -22,6 +23,7 @@ type Config struct {
 const (
 	defaultPort            = 8080
 	defaultLogLevel        = slog.LevelInfo
+	defaultLogExportLevel  = slog.LevelInfo
 	defaultShutdownTimeout = 20 * time.Second
 	defaultMaxBodyBytes    = 1 << 20 // 1 MiB
 )
@@ -32,6 +34,7 @@ func Load(getenv func(string) string) (Config, error) {
 	cfg := Config{
 		Port:            defaultPort,
 		LogLevel:        defaultLogLevel,
+		LogExportLevel:  defaultLogExportLevel,
 		ShutdownTimeout: defaultShutdownTimeout,
 		MaxBodyBytes:    defaultMaxBodyBytes,
 	}
@@ -51,9 +54,14 @@ func Load(getenv func(string) string) (Config, error) {
 		errs = append(errs, errors.New("DATABASE_URL: required"))
 	}
 
-	if v := getenv("LOG_LEVEL"); v != "" {
-		if err := cfg.LogLevel.UnmarshalText([]byte(v)); err != nil {
-			errs = append(errs, fmt.Errorf("LOG_LEVEL: %q is not one of debug, info, warn, error", v))
+	for _, l := range []struct {
+		name string
+		dst  *slog.Level
+	}{{"LOG_LEVEL", &cfg.LogLevel}, {"LOG_EXPORT_LEVEL", &cfg.LogExportLevel}} {
+		if v := getenv(l.name); v != "" {
+			if err := l.dst.UnmarshalText([]byte(v)); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %q is not one of debug, info, warn, error", l.name, v))
+			}
 		}
 	}
 

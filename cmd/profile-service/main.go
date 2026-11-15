@@ -41,32 +41,54 @@ func main() {
 	// JSON from the first line, even for config errors (LOG_LEVEL is not known yet).
 	slog.SetDefault(telemetry.NewLogger(os.Stdout, slog.LevelInfo))
 	if err := run(); err != nil {
-		slog.Error("exit", "error", err)
+		var logged loggedError
+		if !errors.As(err, &logged) {
+			slog.Error("exit", "error", err) // before telemetry: stdout only
+		}
 		os.Exit(1)
 	}
 }
 
-func run() error {
+// loggedError is an error that run has already logged, before the telemetry
+// flush, so that it is exported too.
+type loggedError struct{ error }
+
+func (e loggedError) Unwrap() error { return e.error }
+
+func run() (err error) {
 	cfg, err := config.Load(os.Getenv)
 	if err != nil {
 		return err
 	}
-	log := telemetry.NewLogger(os.Stdout, cfg.LogLevel)
-	slog.SetDefault(log)
+	stdoutLog := telemetry.NewLogger(os.Stdout, cfg.LogLevel)
+	slog.SetDefault(stdoutLog)
+	// OTel's own errors: stdout only, at warn whatever LOG_LEVEL is.
+	telemetry.SetErrorLogger(os.Stdout)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
 	// Telemetry first: the pgx tracer and pool metrics use the global providers.
-	shutdownTelemetry, err := telemetry.Setup(ctx, version)
+	providers, err := telemetry.Setup(ctx, version)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
-		if err := shutdownTelemetry(ctx); err != nil {
-			log.Warn("telemetry shutdown", "error", err)
+		if err := providers.Shutdown(ctx); err != nil {
+			stdoutLog.Warn("telemetry shutdown", "error", err) // the exporter is gone
+		}
+	}()
+	// From here on records are exported over OTLP too (stdout only when the SDK is disabled).
+	log := telemetry.NewExportingLogger(os.Stdout, cfg.LogLevel, providers.Logs, cfg.LogExportLevel)
+	slog.SetDefault(log)
+	// Registered after the telemetry shutdown, so it runs before the flush and
+	// the error that ends the process is exported too.
+	defer func() {
+		if err != nil {
+			log.Error("exit", "error", err)
+			err = loggedError{err}
 		}
 	}()
 

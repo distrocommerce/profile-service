@@ -11,7 +11,8 @@ production-shaped. Infrastructure (kind cluster, Envoy Gateway, ZITADEL, observa
 - Every error is RFC 9457 `application/problem+json` with a stable `code` field, including router 404/405,
   413 and recovered panics.
 - Request bodies are limited (`MAX_BODY_BYTES`, default 1 MiB) → 413.
-- OpenTelemetry for traces and metrics (OTLP gRPC to the collector); probes are not traced.
+- OpenTelemetry for traces, metrics and logs (OTLP gRPC to the collector); probes are not traced. Logs also stay
+  on stdout as JSON; `LOG_EXPORT_LEVEL` (default `info`) keeps debug probe lines off OTLP.
 - SQL migrations are embedded and applied at startup.
 - Multi-stage Docker build, distroless `static-debian13:nonroot` runtime, non-root.
 - Images must have linux/arm64 builds (Apple silicon). Pin every version; never `latest`.
