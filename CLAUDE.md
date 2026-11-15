@@ -54,6 +54,54 @@ production-shaped. Infrastructure (kind cluster, Envoy Gateway, ZITADEL, observa
 - Never copy library templates; propose changes to the infra repo instead. If `service-lib` cannot express
   something this service needs, stop and describe the change for `../distrocommerce-infra`; do not work
   around it in `deploy/chart`, and do not edit the infra repo from here.
+- OpenSpec: specs in `openspec/specs/`, changes in `openspec/changes/` (archived under `archive/`). The
+  `/openspec-*` skills use the OpenSpec 2.0 layout: the files live in `.agents/skills/` (with
+  `.openspec-target`), and `.claude/skills/` holds relative symlinks to them; commit both, and edit neither by
+  hand. `openspec update` regenerates them. `openspec-verify-change` is not in the `core` profile; with
+  OpenSpec 2.0.0, `update` (also with `--force`) keeps it. After upgrading OpenSpec, check that it is still
+  there.
+- Features follow the spec-driven workflow below.
 - Never commit secrets. All code, comments, docs and commit messages are in English. No AI attribution in commits.
 - Never commit without the user's approval: propose the files and the message, then wait. One approval
   covers one commit. Keep commits to logical steps on `main`; push only when asked.
+
+## Feature workflow (spec-driven, OpenSpec)
+0. **explore** (optional, `/openspec-explore`): research the idea and the existing code and architecture
+   without changing files.
+1. **propose** (`/openspec-propose`): create the change: `proposal.md` (why and scope), delta specs (`specs/`),
+   `design.md` and an atomic plan (`tasks.md`). After propose and after every update-change, run
+   `openspec validate <change> --strict` (structure only, not whether the content is right).
+2. **spec review + update-change** (`/openspec-update-change`): the user reviews the plan, looks for
+   architectural weak spots and decides the open questions; the artifacts are adjusted before any code is
+   written.
+3. **apply-change** (`/openspec-apply-change`): implement `tasks.md` step by step: business logic, tests,
+   docs, Dockerfile, Helm chart and manifests, within the chart rules above (no copied library templates, no
+   workarounds in `deploy/chart`, no edits to the infra repo; if `service-lib` cannot express something, stop
+   and describe the change for `../distrocommerce-infra`).
+4. **technical checks**: `make test lint` (go vet, unit tests with `-race`, golangci-lint); for SQL or
+   migration changes also the store test with `PROFILE_TEST_DATABASE_URL`. Planned, not yet in the Makefile:
+   kubeconform, kube-linter, Trivy.
+5. **verify-change** (`/openspec-verify-change`): AI audit of the code and configs against `specs/` and
+   `design.md`, with CRITICAL, WARNING and SUGGESTION findings. Spec gaps go back to step 2, code gaps to
+   step 3, then step 4 again.
+6. **code review**: `/code-review` (plus `/security-review` when identity, request parsing or secrets are
+   touched), and the user reads the diff against the specs. Verify is the same model checking its own work;
+   this is the independent check. Findings go back to step 2 or 3 like verify's.
+7. **deploy to local**: `make image kind-load deploy PROJECT_ID=...`. The image is built from the uncommitted
+   tree, so its tag has a `-dirty-<hash>` suffix. `PROJECT_ID` is never committed.
+8. **manual end-to-end check**: real requests through Envoy with a ZITADEL token and a check of the database.
+   The user fetches the token in a separate terminal with `read`, so the client secret never reaches the
+   conversation, and writes it to the token file in Claude's session scratchpad; Claude never prints it and
+   deletes the file afterwards. Note the existing rows first (stop if the test user already has a profile);
+   afterwards delete only the rows the test created.
+9. **archive-change** (`/openspec-archive-change`): merge the delta specs into `openspec/specs/`, verify the
+   sync (nothing moves if it fails), then move the change to `openspec/changes/archive/<date>-<change>/`;
+   optionally `openspec validate --specs --strict`.
+10. **commit & push**: code, tests, docs, main specs and the archived change in one commit after approval;
+    push only when asked; no AI attribution.
+11. **clean redeploy**: run `make image kind-load deploy PROJECT_ID=...` again from the committed tree, so the
+    image gets the clean short-SHA tag that matches the commit. Quick check: pod Running and one request
+    through Envoy.
+
+Later: branch + PR workflow with CI on push (wait for green before merge), Tilt (makes steps 7 and 11
+automatic), GitOps deploy (Argo CD).
