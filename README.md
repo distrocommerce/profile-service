@@ -130,7 +130,7 @@ deploy/chart          Helm chart (depends on service-lib)
 
 ## Local development
 
-Prerequisites: Go 1.27.3, Docker, and the local environment from
+Prerequisites: Go 1.27.4, Docker, and the local environment from
 [distrocommerce-infra](../distrocommerce-infra) (`docs/local-environment.md`), checked out next to
 this repository: the compose PostgreSQL, the kind cluster `distro`, Envoy Gateway, ZITADEL and the
 observability stack.
