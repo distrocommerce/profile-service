@@ -1,0 +1,171 @@
+# Checks only: no image push, no deploy. Runs on amd64; the arm64 image for the
+# local cluster is built with `make image`.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    shell: bash # -eo pipefail, so a failing command before `| tee` fails the step
+
+jobs:
+  test:
+    name: test (vet, unit tests -race)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod # go 1.27.3
+      - run: make test
+
+  lint:
+    name: lint (golangci-lint, gofmt/goimports)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # `golangci-lint run`, then `golangci-lint fmt --diff` (fails on any diff),
+      # with the version pinned in the Makefile.
+      - run: make lint
+
+  store-test:
+    name: store test (PostgreSQL 18.6)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres:18.6
+        env:
+          # Throwaway database of this job, not a secret.
+          POSTGRES_USER: profile
+          POSTGRES_PASSWORD: profile
+          POSTGRES_DB: profile
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U profile -d profile"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PROFILE_TEST_DATABASE_URL: postgres://profile:profile@localhost:5432/profile?sslmode=disable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # The store test skips without PROFILE_TEST_DATABASE_URL; here a skip is a failure.
+      - name: go test ./internal/store/ (must run, not skip)
+        run: |
+          go test -race -count=1 -v ./internal/store/ | tee store-test.out
+          if grep -q -- '--- SKIP' store-test.out; then
+            echo "::error::a store test was skipped; it must run against the service database"
+            exit 1
+          fi
+          if ! grep -q -- '--- PASS: Test' store-test.out; then
+            echo "::error::no store test ran"
+            exit 1
+          fi
+
+  chart:
+    name: chart (helm template, security defaults)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      # deploy/chart depends on file://../../../distrocommerce-infra/charts/service-lib,
+      # so both repositories are checked out side by side in the workspace.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          path: profile-service
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: distrocommerce/distrocommerce-infra
+          # Bump this ref together with the service-lib version in deploy/chart/Chart.yaml.
+          ref: service-lib-v0.5.0
+          path: distrocommerce-infra
+          persist-credentials: false
+      - uses: azure/setup-helm@9bc31f4ebc9c6b171d7bfbaa5d006ae7abdb4310 # v5.0.1
+        with:
+          version: v4.3.1
+      - name: helm template
+        working-directory: profile-service
+        run: |
+          helm dependency update deploy/chart
+          helm template profile deploy/chart -f deploy/chart/values-local.yaml \
+            --set image.tag=ci --set-string 'auth.audiences={123}' > rendered.yaml
+      # yq (mikefarah v4) is preinstalled on the GitHub-hosted Ubuntu runners.
+      - name: service-lib security defaults
+        working-directory: profile-service
+        run: |
+          yq ea -e '[select(.kind == "Deployment")] | length == 1' rendered.yaml
+          yq ea -e '[select(.kind == "Deployment") | .spec.template.spec.securityContext.runAsNonRoot == true] | all' rendered.yaml
+          yq ea -e '[select(.kind == "Deployment") | .spec.template.spec.containers[] | .securityContext.readOnlyRootFilesystem == true] | (length > 0 and all)' rendered.yaml
+
+  docker:
+    name: docker build (no push)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: false
+          build-args: VERSION=${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      # Known vulnerabilities in the standard library and dependencies that the code calls.
+      - run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+  openspec:
+    name: openspec validate (main specs)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      OPENSPEC_TELEMETRY: "0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.2 # OpenSpec 2.0.0 needs Node >= 22.12.0
+      - run: npm install --global @fission-ai/openspec@2.0.0
+      - run: openspec validate --specs --strict --no-interactive

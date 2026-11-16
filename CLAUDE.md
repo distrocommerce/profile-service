@@ -27,10 +27,16 @@ production-shaped. Infrastructure (kind cluster, Envoy Gateway, ZITADEL, observa
 - `internal/telemetry`: OTel providers, slog logger with `trace_id`
 - `deploy/chart/`: thin Helm chart over `service-lib`, plus `values-local.yaml`
 - `Makefile`: build, test, lint, run, image, kind-load, deploy, undeploy
+- `.github/workflows/ci.yml`: CI checks (no image push, no deploy)
 
 ## How to work here
-- Before finishing a change: `make test lint` (go vet, tests, golangci-lint) must pass. `make lint` uses
-  `go run` with a pinned golangci-lint, because a prebuilt binary built with an older Go refuses this module.
+- Before finishing a change: `make test lint` (go vet, tests, golangci-lint, gofmt/goimports diff) must pass.
+  `make lint` uses `go run` with a pinned golangci-lint, because a prebuilt binary built with an older Go
+  refuses this module. A change is done only when CI on the pushed commit is green.
+- CI checks out `distrocommerce-infra` at the tag `service-lib-v<version>` for the chart job. Bump that ref in
+  `.github/workflows/ci.yml` together with the service-lib version in `deploy/chart/Chart.yaml`; the tag is
+  created and pushed in the infra repo.
+- Actions in `.github/workflows/` are pinned to a full commit SHA with the version in a comment.
 - New endpoints: handler test with `httptest` for success and every error case; errors use the shared helper.
   Request bodies go through `decodeJSON`, so the body limit and the 413 come from one place.
 - Middleware between `otelhttp` and the mux must pass the same `*http.Request` on (no `r.WithContext`).
@@ -79,9 +85,11 @@ production-shaped. Infrastructure (kind cluster, Envoy Gateway, ZITADEL, observa
    docs, Dockerfile, Helm chart and manifests, within the chart rules above (no copied library templates, no
    workarounds in `deploy/chart`, no edits to the infra repo; if `service-lib` cannot express something, stop
    and describe the change for `../distrocommerce-infra`).
-4. **technical checks**: `make test lint` (go vet, unit tests with `-race`, golangci-lint); for SQL or
-   migration changes also the store test with `PROFILE_TEST_DATABASE_URL`. Planned, not yet in the Makefile:
-   kubeconform, kube-linter, Trivy.
+4. **technical checks**: `make test lint` (go vet, unit tests with `-race`, golangci-lint, gofmt/goimports
+   diff); for SQL or migration changes also the store test with `PROFILE_TEST_DATABASE_URL`. CI runs the same
+   checks on every push to `main` and every pull request, plus the store test against PostgreSQL 18.6,
+   `helm template` with the security defaults check, `docker build`, `govulncheck` and
+   `openspec validate --specs --strict`. Planned: kubeconform, kube-linter, Trivy.
 5. **verify-change** (`/openspec-verify-change`): AI audit of the code and configs against `specs/` and
    `design.md`, with CRITICAL, WARNING and SUGGESTION findings. Spec gaps go back to step 2, code gaps to
    step 3, then step 4 again.
@@ -99,10 +107,11 @@ production-shaped. Infrastructure (kind cluster, Envoy Gateway, ZITADEL, observa
    sync (nothing moves if it fails), then move the change to `openspec/changes/archive/<date>-<change>/`;
    optionally `openspec validate --specs --strict`.
 10. **commit & push**: code, tests, docs, main specs and the archived change in one commit after approval;
-    push only when asked; no AI attribution.
+    push only when asked; no AI attribution. After the push, CI on that commit must be green before the change
+    counts as done; a red run goes back to step 3.
 11. **clean redeploy**: run `make image kind-load deploy PROJECT_ID=...` again from the committed tree, so the
     image gets the clean short-SHA tag that matches the commit. Quick check: pod Running and one request
     through Envoy.
 
-Later: branch + PR workflow with CI on push (wait for green before merge), Tilt (makes steps 7 and 11
+Later: branch + PR workflow (wait for green CI before merge), Tilt (makes steps 7 and 11
 automatic), GitOps deploy (Argo CD).

@@ -32,12 +32,16 @@ type Store struct {
 // Open creates a pool for databaseURL with OpenTelemetry query tracing
 // (spans go to the global tracer provider, so set it up first) and pool
 // metrics. It does not connect; the first query or Ping does.
+//
+// Pool acquires are not traced: otelpgx emits them as CLIENT spans with the
+// database attributes, so Tempo's service graph would count each one as a
+// second call to PostgreSQL. Acquire waits stay visible in the pool metrics.
 func Open(ctx context.Context, databaseURL string) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("parse DATABASE_URL: %w", err)
 	}
-	cfg.ConnConfig.Tracer = otelpgx.NewTracer()
+	cfg.ConnConfig.Tracer = otelpgx.NewTracer(otelpgx.WithDisableAcquireTracer())
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

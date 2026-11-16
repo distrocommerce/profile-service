@@ -18,6 +18,7 @@ CHART        := deploy/chart
 # Built with the local Go toolchain: a prebuilt golangci-lint must be built with
 # Go >= the go.mod version, so `go run` a pinned release instead.
 GOLANGCI_LINT_VERSION ?= v2.15.0
+GOLANGCI_LINT         := go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION)
 
 # `make run`: the compose PostgreSQL from distrocommerce-infra (local dev
 # credentials, the same as its compose/.env.example). Override as needed.
@@ -35,8 +36,9 @@ test: ## vet + unit tests (set PROFILE_TEST_DATABASE_URL to include the store te
 	go vet ./...
 	go test -race ./...
 
-lint:
-	go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
+lint: ## golangci-lint, then gofmt/goimports as a check (fails on any diff; `golangci-lint fmt` fixes)
+	$(GOLANGCI_LINT) run ./...
+	$(GOLANGCI_LINT) fmt --diff
 
 run: ## locally on :8081, against localhost:5432, telemetry off
 	PORT=$(LOCAL_PORT) DATABASE_URL='$(LOCAL_DATABASE_URL)' LOG_LEVEL=debug OTEL_SDK_DISABLED=true go run ./cmd/profile-service

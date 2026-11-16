@@ -1,5 +1,7 @@
 # profile-service
 
+[![CI](https://github.com/distrocommerce/profile-service/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/distrocommerce/profile-service/actions/workflows/ci.yml)
+
 DistroCommerce profile service: stores and serves user profile data, keyed by the ZITADEL user ID
 (token `sub`) that Envoy Gateway passes in `X-User-ID`. Go, PostgreSQL, OpenTelemetry; deployed
 with the shared Helm library chart. It is the template for the other services.
@@ -108,7 +110,9 @@ chart sets the service name (`profile`) and the collector endpoint.
     export) are logged to stdout as WARN `opentelemetry error` lines whatever `LOG_LEVEL` is, and are
     never exported, so a failing export cannot feed itself.
 - **Tracing**: server spans named after the route (`GET /v1/users/me`), continuing the trace
-  started at Envoy; one span per SQL query; `/healthz` and `/readyz` are not traced.
+  started at Envoy; one span per SQL query (pool acquires are not traced, so the service graph counts
+  only real database calls; acquire waits are in the pool metrics); `/healthz` and `/readyz` are not
+  traced.
 - **Metrics** (OTLP, every 15 s): HTTP server duration and body sizes per route and status, pgx
   operation durations and pool statistics, Go runtime (memory, goroutines, GC goal, GOMAXPROCS,
   scheduling latency). Grafana dashboard: **Service overview**, service `profile`.
@@ -133,7 +137,7 @@ observability stack.
 
 ```sh
 make test   # go vet + go test -race
-make lint   # golangci-lint (pinned, built with the local Go)
+make lint   # golangci-lint (pinned, built with the local Go), then a gofmt/goimports diff check
 make run    # http://localhost:8081, against the compose PostgreSQL on localhost:5432
 make build  # bin/profile-service
 ```
@@ -144,6 +148,11 @@ make build  # bin/profile-service
 ```sh
 PROFILE_TEST_DATABASE_URL='postgres://profile:profile_dev@localhost:5432/profile?sslmode=disable' go test ./internal/store/
 ```
+
+CI (`.github/workflows/ci.yml`, on every push to `main` and every pull request) runs `make test` and
+`make lint`, the store test against a PostgreSQL 18.6 service container (a skipped store test fails
+the run), `helm template` of the chart with a check of the service-lib security defaults, a
+`docker build` without push, `govulncheck` and `openspec validate --specs --strict`.
 
 ## Deploy to the local cluster
 
